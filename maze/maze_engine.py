@@ -1,16 +1,86 @@
-from machine import SPI, Pin
-from time import sleep, sleep_ms
+from machine import Pin, SPI
+from time import sleep_ms
 import max7219
 from mpu6050 import MPU6050
 
+WIDTH = 8
+HEIGHT = 8
+
+# ----------------------------------------
+# LEVELS
+# ----------------------------------------
+
+LEVELS = [
+
+[
+"########",
+"#S.....#",
+"#.###..#",
+"#.#....#",
+"#.####.#",
+"#.....G#",
+"#......#",
+"########"
+
+]
+
+]
+
+# ----------------------------------------
+# BALL
+# ----------------------------------------
+
+class Ball:
+
+    def __init__(self):
+
+        self.x = 1.0
+        self.y = 1.0
+
+        self.vx = 0.0
+        self.vy = 0.0
+
+        self.ax = 0.0
+        self.ay = 0.0
+
+        self.radius = 0.25
+
+        self.friction = 0.93
+        self.bounce = 0.35
+        self.max_speed = 0.55
+
+    def update(self):
+
+        self.vx += self.ax
+        self.vy += self.ay
+
+        self.vx *= self.friction
+        self.vy *= self.friction
+
+        if self.vx > self.max_speed:
+            self.vx = self.max_speed
+
+        if self.vx < -self.max_speed:
+            self.vx = -self.max_speed
+
+        if self.vy > self.max_speed:
+            self.vy = self.max_speed
+
+        if self.vy < -self.max_speed:
+            self.vy = -self.max_speed
+
+        self.x += self.vx
+        self.y += self.vy
+
+# ----------------------------------------
+# ENGINE
+# ----------------------------------------
 
 class MazeEngine:
 
     def __init__(self):
 
-        # -------------------------------
-        # DISPLAY
-        # -------------------------------
+        # ---------------- Display ----------------
 
         self.spi = SPI(
             0,
@@ -31,50 +101,21 @@ class MazeEngine:
 
         self.display.brightness(5)
 
-        # -------------------------------
-        # SENSOR
-        # -------------------------------
+        # ---------------- Sensor ----------------
 
         self.sensor = MPU6050()
 
-        # -------------------------------
-        # PLAYER
-        # -------------------------------
+        # ---------------- Ball ----------------
 
-        self.ball_x = 1.0
-        self.ball_y = 1.0
+        self.ball = Ball()
 
-        self.vel_x = 0.0
-        self.vel_y = 0.0
-
-        # -------------------------------
-        # CALIBRATION
-        # -------------------------------
+        # ---------------- Calibration ----------------
 
         self.base_x = 0
         self.base_y = 0
         self.base_z = 0
 
-        # -------------------------------
-        # LEVELS
-        # -------------------------------
-
-        self.levels = [
-
-            [
-
-            "########",
-            "#S     #",
-            "# ###  #",
-            "# #    #",
-            "# #### #",
-            "#     G#",
-            "#      #",
-            "########"
-
-            ]
-
-        ]
+        # ---------------- Level ----------------
 
         self.level = 0
 
@@ -82,15 +123,11 @@ class MazeEngine:
 
         self.calibrate()
 
-    # ---------------------------------------
-    # CALIBRATION
-    # ---------------------------------------
+    # ----------------------------------------
 
     def calibrate(self):
 
-        print("----------------------")
-        print("Keep Board Flat")
-        print("----------------------")
+        print("Keep board flat...")
 
         sx = 0
         sy = 0
@@ -104,53 +141,51 @@ class MazeEngine:
             sy += a["y"]
             sz += a["z"]
 
-            sleep(0.02)
+            sleep_ms(20)
 
         self.base_x = sx / 100
         self.base_y = sy / 100
         self.base_z = sz / 100
 
-        print("Calibration Complete!")
+        print("Calibration Complete")
 
-    # ---------------------------------------
-    # LOAD LEVEL
-    # ---------------------------------------
+    # ----------------------------------------
 
     def load_level(self):
 
-        self.maze = self.levels[self.level]
+        self.maze = LEVELS[self.level]
 
-        for y in range(8):
+        for y in range(HEIGHT):
 
-            for x in range(8):
+            for x in range(WIDTH):
 
                 c = self.maze[y][x]
 
                 if c == "S":
 
-                    self.ball_x = x
-                    self.ball_y = y
+                    self.ball.x = x
+                    self.ball.y = y
 
                 elif c == "G":
 
                     self.goal_x = x
                     self.goal_y = y
 
-    # ---------------------------------------
-    # DRAW
-    # ---------------------------------------
+    # ----------------------------------------
 
     def draw(self):
 
         self.display.fill(0)
 
-        for y in range(8):
+        for y in range(HEIGHT):
 
-            for x in range(8):
+            for x in range(WIDTH):
 
                 if self.maze[y][x] == "#":
 
                     self.display.pixel(x, y, 1)
+
+        # Goal
 
         self.display.pixel(
             self.goal_x,
@@ -158,18 +193,122 @@ class MazeEngine:
             1
         )
 
+        # Ball
+
         self.display.pixel(
-            round(self.ball_x),
-            round(self.ball_y),
+            round(self.ball.x),
+            round(self.ball.y),
             1
         )
 
         self.display.show()
 
-    # ---------------------------------------
-    # UPDATE
-    # ---------------------------------------
+    # ----------------------------------------
+        # ----------------------------------------
+    # SENSOR
+    # ----------------------------------------
+
+    def read_gravity(self):
+
+        a = self.sensor.read_accel_data()
+
+        gx = (a["x"] - self.base_x) / 8.0
+        gy = -(a["y"] - self.base_y) / 8.0
+
+        # dead zone
+        if abs(gx) < 0.03:
+            gx = 0
+
+        if abs(gy) < 0.03:
+            gy = 0
+
+        return gx, gy
+
+    # ----------------------------------------
+    # COLLISION
+    # ----------------------------------------
+
+    def is_wall(self, x, y):
+
+        tx = int(round(x))
+        ty = int(round(y))
+
+        if tx < 0 or tx >= WIDTH:
+            return True
+
+        if ty < 0 or ty >= HEIGHT:
+            return True
+
+        return self.maze[ty][tx] == "#"
+
+    # ----------------------------------------
+
+    def move_ball(self):
+
+        # ---------- X Axis ----------
+
+        nx = self.ball.x + self.ball.vx
+
+        if not self.is_wall(nx, self.ball.y):
+
+            self.ball.x = nx
+
+        else:
+
+            self.ball.vx *= -self.ball.bounce
+
+        # ---------- Y Axis ----------
+
+        ny = self.ball.y + self.ball.vy
+
+        if not self.is_wall(self.ball.x, ny):
+
+            self.ball.y = ny
+
+        else:
+
+            self.ball.vy *= -self.ball.bounce
+
+    # ----------------------------------------
+
+    def check_goal(self):
+
+        if (
+            round(self.ball.x) == self.goal_x and
+            round(self.ball.y) == self.goal_y
+        ):
+
+            print("LEVEL COMPLETE!")
+
+            for i in range(4):
+
+                self.display.fill(1)
+                self.display.show()
+                sleep_ms(120)
+
+                self.display.fill(0)
+                self.display.show()
+                sleep_ms(120)
+
+            self.ball.x = 1
+            self.ball.y = 1
+
+            self.ball.vx = 0
+            self.ball.vy = 0
+
+    # ----------------------------------------
 
     def update(self):
+
+        gx, gy = self.read_gravity()
+
+        self.ball.ax = gx * 0.08
+        self.ball.ay = gy * 0.08
+
+        self.ball.update()
+
+        self.move_ball()
+
+        self.check_goal()
 
         self.draw()
