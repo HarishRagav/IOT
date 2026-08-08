@@ -7,7 +7,9 @@ import framebuf
 # register definitions
 SET_CONTRAST = const(0x81)
 SET_ENTIRE_ON = const(0xA4)
-SET_NORM_INV = const(0xA6)
+# its for inverse 
+# SET_NORM_INV = const(0xA6) 
+SET_NORM_INV = const(0xA7)
 SET_DISP = const(0xAE)
 SET_MEM_ADDR = const(0x20)
 SET_COL_ADDR = const(0x21)
